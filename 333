@@ -1,0 +1,384 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cinematic 3D Particle Christmas Tree</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #020205; }
+        canvas { display: block; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #C0C0C0; font-family: 'Courier New', Courier, monospace; letter-spacing: 2px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">INITIALIZING VISUALS...</div>
+
+    <!-- Import Map for Three.js and Post Processing -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- 配置参数 (Config) ---
+        const CONFIG = {
+            tree: {
+                height: 60,
+                radius: 25,
+                particleCount: 18000,
+                colorGreen: new THREE.Color(0x2E5B38), // 哑光绿
+                colorGold: new THREE.Color(0xFFD700),  // 金属金
+                colorRed: new THREE.Color(0xC41E3A)    // 圣诞红
+            },
+            star: {
+                size: 4.5,
+                particleCount: 1500,
+                blinkBPM: 65, // 65次/分钟
+                glowRadius: 5
+            },
+            camera: {
+                fov: 45,
+                posZ: 100
+            }
+        };
+
+        class ChristmasScene {
+            constructor() {
+                this.time = 0;
+                this.init();
+                this.createParticleTexture();
+                this.createTree();
+                this.createStar();
+                this.setupPostProcessing();
+                this.addEnvironment();
+                this.animate();
+                
+                document.getElementById('loading').style.display = 'none';
+                window.addEventListener('resize', this.onResize.bind(this));
+            }
+
+            init() {
+                // 1. Scene & Camera
+                this.scene = new THREE.Scene();
+                // 电影感深色背景 + 雾气增加景深
+                this.scene.background = new THREE.Color(0x020205); 
+                this.scene.fog = new THREE.FogExp2(0x020205, 0.008);
+
+                this.camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(0, 20, CONFIG.camera.posZ);
+
+                // 2. Renderer
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 性能优化
+                this.renderer.toneMapping = THREE.ReinhardToneMapping;
+                document.body.appendChild(this.renderer.domElement);
+
+                // 3. Controls
+                this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.autoRotate = true;
+                this.controls.autoRotateSpeed = 0.5;
+                this.controls.maxPolarAngle = Math.PI / 2; // 不允许看到底部
+            }
+
+            // 生成柔和的圆形粒子贴图
+            createParticleTexture() {
+                const canvas = document.createElement('canvas');
+                canvas.width = 32;
+                canvas.height = 32;
+                const context = canvas.getContext('2d');
+                const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+                gradient.addColorStop(0, 'rgba(255,255,255,1)');
+                gradient.addColorStop(0.5, 'rgba(255,255,255,0.4)');
+                gradient.addColorStop(1, 'rgba(0,0,0,0)');
+                context.fillStyle = gradient;
+                context.fillRect(0, 0, 32, 32);
+                this.particleTexture = new THREE.CanvasTexture(canvas);
+            }
+
+            createTree() {
+                const geometry = new THREE.BufferGeometry();
+                const positions = [];
+                const colors = [];
+                const sizes = [];
+
+                const { height, radius, particleCount, colorGreen, colorGold, colorRed } = CONFIG.tree;
+
+                for (let i = 0; i < particleCount; i++) {
+                    // 螺旋上升算法
+                    const progress = i / particleCount; 
+                    const angle = progress * Math.PI * 40; // 绕多少圈
+                    
+                    // 半径随高度减小，形成锥体，加入随机扰动增加“枝叶感”
+                    const currentRadius = (1 - progress) * radius;
+                    const randomSpread = (Math.random() - 0.5) * 3; 
+                    
+                    const x = (currentRadius + randomSpread) * Math.cos(angle);
+                    const z = (currentRadius + randomSpread) * Math.sin(angle);
+                    const y = progress * height - (height / 2); // 居中
+
+                    positions.push(x, y, z);
+
+                    // 颜色逻辑：大部分是绿色，随即穿插金色和红色
+                    const rand = Math.random();
+                    let color;
+                    let size;
+
+                    if (rand > 0.92) {
+                        // 金色装饰 (5%)
+                        color = colorGold;
+                        size = Math.random() * 6 + 2; // 2px - 8px
+                    } else if (rand > 0.85) {
+                        // 红色装饰 (7%)
+                        color = colorRed;
+                        size = Math.random() * 5 + 2;
+                    } else {
+                        // 哑光绿 (88%) - 增加一点亮度的随机性模拟“哑光”下的光影
+                        color = colorGreen.clone().multiplyScalar(0.8 + Math.random() * 0.4);
+                        size = Math.random() * 4 + 1; // 1px - 5px
+                    }
+
+                    colors.push(color.r, color.g, color.b);
+                    sizes.push(size);
+                }
+
+                geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+                geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+
+                // 材质
+                const material = new THREE.PointsMaterial({
+                    size: 1,
+                    vertexColors: true,
+                    map: this.particleTexture,
+                    alphaTest: 0.1,
+                    transparent: true,
+                    opacity: 0.9,
+                    sizeAttenuation: true, // 关键：近大远小
+                    depthWrite: false,
+                    blending: THREE.NormalBlending // 哑光感，不用 Additive
+                });
+
+                this.treeSystem = new THREE.Points(geometry, material);
+                this.scene.add(this.treeSystem);
+            }
+
+            createStar() {
+                // 1. 创建五角星形状
+                const starShape = new THREE.Shape();
+                const points = 5;
+                const outerRadius = CONFIG.star.size;
+                const innerRadius = CONFIG.star.size * 0.45; // 胖一点的星星
+
+                for (let i = 0; i < points * 2; i++) {
+                    const r = (i % 2 === 0) ? outerRadius : innerRadius;
+                    const a = (i / (points * 2)) * Math.PI * 2 + Math.PI / 10; // 旋转对正
+                    const x = Math.cos(a) * r;
+                    const y = Math.sin(a) * r;
+                    if (i === 0) starShape.moveTo(x, y);
+                    else starShape.lineTo(x, y);
+                }
+                starShape.closePath();
+
+                // 2. 挤压成 3D 几何体，用于采样点
+                const extrudeSettings = { depth: 1.5, bevelEnabled: true, bevelThickness: 0.5 };
+                const starGeometry = new THREE.ExtrudeGeometry(starShape, extrudeSettings);
+                
+                // 将几何体居中
+                starGeometry.center();
+
+                // 3. 在几何体表面/内部生成点
+                const posAttribute = starGeometry.attributes.position;
+                const particlePositions = [];
+                const particleSizes = [];
+                const particleTypes = []; // 0 = 内部(闪烁), 1 = 边缘(常亮)
+
+                // 简单的采样逻辑：直接取顶点，并进行插值加密
+                const count = CONFIG.star.particleCount;
+                
+                for(let i=0; i<count; i++) {
+                    // 随机选择三角形面上的点 (简化为随机位置加扰动)
+                    const idx = Math.floor(Math.random() * (posAttribute.count));
+                    
+                    // 基础坐标
+                    let x = posAttribute.getX(idx);
+                    let y = posAttribute.getY(idx);
+                    let z = posAttribute.getZ(idx);
+
+                    // 向内部/外部随机扩散，形成体积感
+                    const spread = (Math.random() - 0.5) * 0.8;
+                    x += spread; y += spread; z += spread;
+
+                    particlePositions.push(x, y, z);
+                    
+                    // 尺寸分布 1px - 3px
+                    particleSizes.push(Math.random() * 2.0 + 1.0);
+
+                    // 定义内外层：越靠近中心的，越容易闪烁
+                    const distFromCenter = Math.sqrt(x*x + y*y + z*z);
+                    // 距离中心 < 2.0 视为内层
+                    if (distFromCenter < 2.0) {
+                        particleTypes.push(0.0); // 闪烁
+                    } else {
+                        particleTypes.push(1.0); // 辉光轮廓，常亮
+                    }
+                }
+
+                const starGeo = new THREE.BufferGeometry();
+                starGeo.setAttribute('position', new THREE.Float32BufferAttribute(particlePositions, 3));
+                starGeo.setAttribute('aSize', new THREE.Float32BufferAttribute(particleSizes, 1));
+                starGeo.setAttribute('aType', new THREE.Float32BufferAttribute(particleTypes, 1));
+
+                // 4. 自定义 Shader 实现特定的闪烁逻辑
+                const starMaterial = new THREE.ShaderMaterial({
+                    uniforms: {
+                        uTime: { value: 0 },
+                        uColor: { value: new THREE.Color(0xFFEA00) }, // 纯金色
+                        uTexture: { value: this.particleTexture }
+                    },
+                    vertexShader: `
+                        attribute float aSize;
+                        attribute float aType;
+                        varying float vType;
+                        void main() {
+                            vType = aType;
+                            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                            gl_PointSize = aSize * (300.0 / -mvPosition.z); // 尺寸衰减
+                            gl_Position = projectionMatrix * mvPosition;
+                        }
+                    `,
+                    fragmentShader: `
+                        uniform float uTime;
+                        uniform vec3 uColor;
+                        uniform sampler2D uTexture;
+                        varying float vType;
+
+                        void main() {
+                            vec4 tex = texture2D(uTexture, gl_PointCoord);
+                            if (tex.a < 0.1) discard;
+
+                            float alpha = 1.0;
+                            
+                            // 闪烁逻辑：65 BPM
+                            // 60 / 65 = 0.92秒一个周期
+                            if (vType < 0.5) {
+                                // 内部粒子：正弦波闪烁
+                                float flash = sin(uTime * 6.8); // 6.8 approx matches 65BPM
+                                alpha = 0.5 + 0.5 * flash; // 亮度在 0.5 - 1.0 之间波动
+                            } else {
+                                // 外部粒子：保持高亮，轻微抖动增加质感
+                                alpha = 0.8 + 0.2 * sin(uTime * 20.0);
+                            }
+
+                            // 颜色增强，配合 Bloom
+                            gl_FragColor = vec4(uColor * 2.0, alpha * tex.a); 
+                        }
+                    `,
+                    transparent: true,
+                    blending: THREE.AdditiveBlending, // 加法混合让金色更亮
+                    depthWrite: false
+                });
+
+                this.starSystem = new THREE.Points(starGeo, starMaterial);
+                
+                // 将星星放在树顶
+                this.starSystem.position.y = CONFIG.tree.height / 2 + 1.5; 
+                this.scene.add(this.starSystem);
+            }
+
+            setupPostProcessing() {
+                // 1. Render Pass
+                const renderScene = new RenderPass(this.scene, this.camera);
+
+                // 2. Unreal Bloom Pass (关键：实现辉光)
+                // resolution, strength, radius, threshold
+                const bloomPass = new UnrealBloomPass(
+                    new THREE.Vector2(window.innerWidth, window.innerHeight),
+                    1.5, 0.4, 0.85
+                );
+                
+                // 调整参数以符合“电影感”和“辉光半径5px”的视觉感受
+                bloomPass.strength = 1.2; // 强度
+                bloomPass.radius = 0.5;   // 扩散范围
+                bloomPass.threshold = 0.3; // 阈值：只让亮的颜色发光
+
+                this.composer = new EffectComposer(this.renderer);
+                this.composer.addPass(renderScene);
+                this.composer.addPass(bloomPass);
+            }
+
+            addEnvironment() {
+                // 添加一些环境微光粒子，增加空间层次
+                const geo = new THREE.BufferGeometry();
+                const count = 300;
+                const pos = [];
+                for(let i=0; i<count; i++) {
+                    pos.push(
+                        (Math.random() - 0.5) * 150,
+                        (Math.random() - 0.5) * 100,
+                        (Math.random() - 0.5) * 150
+                    );
+                }
+                geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                const mat = new THREE.PointsMaterial({
+                    size: 1.5, color: 0xFFFFFF, 
+                    transparent: true, opacity: 0.2,
+                    map: this.particleTexture, blending: THREE.AdditiveBlending
+                });
+                const bgParticles = new THREE.Points(geo, mat);
+                this.scene.add(bgParticles);
+            }
+
+            onResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.composer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            animate() {
+                requestAnimationFrame(this.animate.bind(this));
+
+                const delta = 0.016;
+                this.time += delta;
+
+                this.controls.update();
+
+                // 树的轻微自转
+                if (this.treeSystem) {
+                    this.treeSystem.rotation.y = this.time * 0.1;
+                }
+
+                // 星星的自转（稍快）与 Uniform 更新
+                if (this.starSystem) {
+                    this.starSystem.rotation.y = -this.time * 0.2;
+                    this.starSystem.material.uniforms.uTime.value = this.time;
+                }
+
+                // 渲染 Post-Processing 结果
+                this.composer.render();
+            }
+        }
+
+        // 启动场景
+        new ChristmasScene();
+    </script>
+</body>
+</html>
+```
