@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cinematic 3D Christmas Tree | Expert Edition</title>
+    <style>
+        body { margin: 0; background-color: #020505; overflow: hidden; }
+        canvas { display: block; }
+        #loader {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #ffd700; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-transform: uppercase; letter-spacing: 2px; font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="loader">Loading Cinematic Experience...</div>
+
+    <!-- 使用 UMD 全局资源，确保在任何服务器环境都能直接运行 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+    <!-- 后期处理插件 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+<script>
+    // 强制检查资源加载
+    window.onload = () => {
+        document.getElementById('loader').style.display = 'none';
+        initScene();
+    };
+
+    function initScene() {
+        const CONFIG = {
+            treeCount: 60000,
+            starCount: 3000,
+            bpm: 65,
+            colors: {
+                matteGreen: new THREE.Color(0x0a2d0a),
+                metallicGold: new THREE.Color(0xffd700),
+                christmasRed: new THREE.Color(0xaf0000)
+            }
+        };
+
+        let scene, camera, renderer, composer, clock;
+
+        // --- 初始化 ---
+        scene = new THREE.Scene();
+        clock = new THREE.Clock();
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 4, 14);
+
+        renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // 优化性能
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        document.body.appendChild(renderer.domElement);
+
+        // --- 圣诞树主体 ---
+        const treeGeo = new THREE.BufferGeometry();
+        const positions = [];
+        const colors = [];
+        const sizes = [];
+
+        for (let i = 0; i < CONFIG.treeCount; i++) {
+            const y = Math.random() * 12 - 4; 
+            const radius = (8 - (y + 4) * 0.6) * 0.4;
+            const angle = Math.random() * Math.PI * 2;
+            const dist = Math.pow(Math.random(), 0.7) * radius;
+            
+            positions.push(Math.cos(angle) * dist, y, Math.sin(angle) * dist);
+
+            const rand = Math.random();
+            let col = CONFIG.colors.matteGreen;
+            if (rand > 0.8) col = CONFIG.colors.metallicGold;
+            else if (rand > 0.7) col = CONFIG.colors.christmasRed;
+            
+            colors.push(col.r, col.g, col.b);
+            sizes.push(Math.random() * 6 + 1);
+        }
+
+        treeGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        treeGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        treeGeo.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+
+        const treeMat = new THREE.ShaderMaterial({
+            transparent: true,
+            blending: THREE.AdditiveAlphaBlending,
+            depthWrite: false,
+            vertexColors: true,
+            uniforms: { uTime: { value: 0 } },
+            vertexShader: `
+                attribute float size;
+                varying vec3 vColor;
+                void main() {
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = size * (300.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vColor;
+                void main() {
+                    if (length(gl_PointCoord - 0.5) > 0.5) discard;
+                    gl_FragColor = vec4(vColor, 0.8);
+                }
+            `
+        });
+        scene.add(new THREE.Points(treeGeo, treeMat));
+
+        // --- 树顶五角星 ---
+        const starGeo = new THREE.BufferGeometry();
+        const starPos = [];
+        const starSizes = [];
+        
+        for (let i = 0; i < CONFIG.starCount; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const starShape = (t) => {
+                const a = 0.7, b = 0.3, n = 5;
+                return a * b / Math.sqrt(Math.pow(b * Math.cos(n * t / 2), 2) + Math.pow(a * Math.sin(n * t / 2), 2));
+            };
+            const r = Math.pow(Math.random(), 0.5) * starShape(theta);
+            starPos.push(Math.cos(theta) * r, 8.2 + Math.sin(theta) * r, (Math.random()-0.5)*0.2);
+            starSizes.push(Math.random() * 3 + 1);
+        }
+
+        starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starPos, 3));
+        starGeo.setAttribute('size', new THREE.Float32BufferAttribute(starSizes, 1));
+
+        const starMat = new THREE.ShaderMaterial({
+            transparent: true,
+            blending: THREE.AdditiveAlphaBlending,
+            uniforms: { uTime: { value: 0 }, uColor: { value: CONFIG.colors.metallicGold } },
+            vertexShader: `
+                uniform float uTime;
+                attribute float size;
+                varying float vFlash;
+                void main() {
+                    vFlash = 0.6 + 0.4 * sin(uTime * (65.0/60.0) * 6.283);
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = size * (400.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uColor;
+                varying float vFlash;
+                void main() {
+                    if (length(gl_PointCoord - 0.5) > 0.5) discard;
+                    gl_FragColor = vec4(uColor * vFlash * 1.5, 1.0);
+                }
+            `
+        });
+        scene.add(new THREE.Points(starGeo, starMat));
+
+        // --- 后期处理 ---
+        const renderScene = new THREE.RenderPass(scene, camera);
+        const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.15;
+        bloomPass.strength = 1.2;
+        bloomPass.radius = 0.6;
+
+        composer = new THREE.EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- 循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getElapsedTime();
+            treeMat.uniforms.uTime.value = delta;
+            starMat.uniforms.uTime.value = delta;
+            scene.rotation.y += 0.005;
+            composer.render();
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+    }
+</script>
+</body>
+</html>
